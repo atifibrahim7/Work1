@@ -1,13 +1,7 @@
-// an ultra simple hlsl vertex shader
-// TODO: Part 1c
-// TODO: Part 2b
-	// TODO: Part 3b
-	// TODO: Part 3f
-// TODO: Part 3g
-float4 main(float2 inputVertex : POSITION) : SV_POSITION
+// A simple HLSL vertex shader that processes 3D positions
+
+float4 main(float3 inputVertex : POSITION) : SV_POSITION
 {
-	// TODO: Part 2i
-	// TODO: Part 3b
-	// TODO: Part 3g
-	return float4(inputVertex, 0, 1);
+    // Pass the 3D position directly to the output, setting w to 1 for homogeneous coordinates
+    return float4(inputVertex, 1.0f);
 }

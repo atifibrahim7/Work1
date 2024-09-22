@@ -8,7 +8,7 @@ void PrintLabeledDebugString(const char* label, const char* toPrint)
 {
 	std::cout << label << toPrint << std::endl;
 
-//OutputDebugStringA is a windows-only function 
+	//OutputDebugStringA is a windows-only function 
 #if defined WIN32 
 	OutputDebugStringA(label);
 	OutputDebugStringA(toPrint);
@@ -17,22 +17,18 @@ void PrintLabeledDebugString(const char* label, const char* toPrint)
 
 class Renderer
 {
-
-	struct Vertex
-	{
-		float x, y, z, w;
-	};
 	// proxy handles
 	GW::SYSTEM::GWindow win;
 	GW::GRAPHICS::GVulkanSurface vlk;
 	VkRenderPass renderPass;
 	GW::CORE::GEventReceiver shutdown;
-	
+
 	// what we need at a minimum to draw a triangle
 	VkDevice device = nullptr;
 	VkPhysicalDevice physicalDevice = nullptr;
-	VkBuffer vertexHandle = nullptr;
-	VkDeviceMemory vertexData = nullptr;
+
+	VkBuffer unifiedBufferHandle = nullptr;
+	VkDeviceMemory unifiedBufferData = nullptr;
 	VkShaderModule vertexShader = nullptr;
 	VkShaderModule fragmentShader = nullptr;
 	VkPipeline pipeline = nullptr;
@@ -40,14 +36,22 @@ class Renderer
 
 	unsigned int windowWidth, windowHeight;
 
+	VkBuffer geometryBuffer = nullptr;
+	VkDeviceMemory geometryBufferMemory = nullptr;
+	VkDeviceSize vertexBufferOffset = 0;
+	VkDeviceSize indexBufferOffset = 0;
+	uint32_t indexCount = 0;
+	VkIndexType indexType = VK_INDEX_TYPE_UINT16;
+	tinygltf::Model model; 
+	tinygltf::TinyGLTF loader;	
 	
+
 public:
 	Renderer(GW::SYSTEM::GWindow _win, GW::GRAPHICS::GVulkanSurface _vlk)
 	{
 		win = _win;
 		vlk = _vlk;
-
-		
+		LoadGLTFModel("../Models/triangle.gltf");
 
 		UpdateWindowDimensions();
 		InitializeGraphics();
@@ -55,6 +59,48 @@ public:
 	}
 
 private:
+
+	void LoadGLTFModel(const std::string& filepath)
+	{
+		std::string err;
+		std::string warn;
+
+		bool ret = loader.LoadASCIIFromFile(&model, &err, &warn, filepath);
+
+		if (!warn.empty()) {
+			std::cout << "GLTF Warning: " << warn << std::endl;
+		}
+
+		if (!err.empty()) {
+			std::cout << "GLTF Error: " << err << std::endl;
+		}
+
+		if (!ret) {
+			throw std::runtime_error("Failed to load GLTF model");
+		}
+
+		std::cout << "Loaded GLTF model with " << model.meshes.size() << " meshes" << std::endl;
+
+		const tinygltf::Mesh& mesh = model.meshes[0];
+		const tinygltf::Primitive& primitive = mesh.primitives[0]; // Assuming a single primitive
+
+		// Get the index accessor and its bufferView
+		const tinygltf::Accessor& indexAccessor = model.accessors[primitive.indices];
+		const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccessor.bufferView];
+		 indexBufferOffset = indexBufferView.byteOffset;
+
+		// Get the vertex accessor (for POSITION) and its bufferView
+		int positionAccessorIndex = primitive.attributes.find("POSITION")->second;
+		const tinygltf::Accessor& positionAccessor = model.accessors[positionAccessorIndex];
+		const tinygltf::BufferView& vertexBufferView = model.bufferViews[positionAccessor.bufferView];
+		 vertexBufferOffset = vertexBufferView.byteOffset;
+		  indexCount = indexAccessor.count;
+
+	}
+
+
+
+
 	void UpdateWindowDimensions()
 	{
 		win.GetClientWidth(windowWidth);
@@ -65,7 +111,8 @@ private:
 	{
 		GetHandlesFromSurface();
 		InitializeVertexBuffer();
-		
+		//CreateGeometryBuffer();
+	
 		CompileShaders();
 		InitializeGraphicsPipeline();
 	}
@@ -76,41 +123,74 @@ private:
 		vlk.GetPhysicalDevice((void**)&physicalDevice);
 		vlk.GetRenderPass((void**)&renderPass);
 	}
+
 	void InitializeVertexBuffer()
 	{
-		const int gridDensity = 25;
-		const float gridSpacing = 1.0f / gridDensity;
-		const int totalLines = (gridDensity + 1) * 2; // Horizontal and vertical lines
-		const int verticesPerLine = 2;
-		const int totalVertices = totalLines * verticesPerLine;
-
-		std::vector<Vertex> verts(totalVertices);
-		int vertexIndex = 0;
-
-		for (int i = 0; i <= gridDensity; ++i)
+		float verts[] =
 		{
-			float y = i * gridSpacing - 0.5f;
-			verts[vertexIndex++] = { -0.5f, y, 0.0f, 1.0f };
-			verts[vertexIndex++] = { 0.5f, y, 0.0f, 1.0f };
-		}
+			0,   0.5f,
+			0.5f, -0.5f,
+			-0.5f, -0.5f
+		};
 
-		for (int i = 0; i <= gridDensity; ++i)
-		{
-			float x = i * gridSpacing - 0.5f;
-			verts[vertexIndex++] = { x, -0.5f, 0.0f, 1.0f };
-			verts[vertexIndex++] = { x, 0.5f, 0.0f, 1.0f };
-		}
-
-		CreateVertexBuffer(verts.data(), sizeof(Vertex) * totalVertices);
+		CreateUnifiedBuffer();
 	}
-	
 
-	void CreateVertexBuffer(const void* data, unsigned int sizeInBytes)
+	//void CreateUnifiedBuffer(const void* data, unsigned int sizeInBytes)
+	//{
+	//	// Combine VERTEX and INDEX buffer usage flags
+	//	VkBufferUsageFlags usageFlags = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+
+	//	// Create buffer with both vertex and index buffer usage flags
+	//	GvkHelper::create_buffer(physicalDevice, device, sizeInBytes, usageFlags,
+	//		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+	//		&unifiedBufferHandle, &unifiedBufferData);
+
+	//	// Write data to the unified buffer
+	//	GvkHelper::write_to_buffer(device, unifiedBufferData, data, sizeInBytes);
+	//}
+	void CreateUnifiedBuffer()
 	{
-		GvkHelper::create_buffer(physicalDevice, device, sizeInBytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, 
+		const tinygltf::Mesh& mesh = model.meshes[0];
+		const tinygltf::Primitive& primitive = mesh.primitives[0];
+
+		const tinygltf::Accessor& indexAccessor = model.accessors[primitive.indices];
+		const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccessor.bufferView];
+		const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
+
+		int positionAccessorIndex = primitive.attributes.find("POSITION")->second;
+		const tinygltf::Accessor& positionAccessor = model.accessors[positionAccessorIndex];
+		const tinygltf::BufferView& positionBufferView = model.bufferViews[positionAccessor.bufferView];
+		const tinygltf::Buffer& positionBuffer = model.buffers[positionBufferView.buffer];
+
+		VkDeviceSize indexBufferSize = indexAccessor.count * sizeof(uint16_t);
+		VkDeviceSize vertexBufferSize = positionAccessor.count * 3 * sizeof(float);
+
+		// Ensure index buffer size is aligned to 4 bytes
+		VkDeviceSize alignedIndexBufferSize = (indexBufferSize + 3) & ~3;
+
+		VkDeviceSize totalBufferSize = alignedIndexBufferSize + vertexBufferSize;
+
+		// Create unified buffer
+		GvkHelper::create_buffer(physicalDevice, device, totalBufferSize,
+			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			&vertexHandle, &vertexData);
-		GvkHelper::write_to_buffer(device, vertexData, data, sizeInBytes); // Transfer triangle data to the vertex buffer. (staging would be prefered here)
+			&unifiedBufferHandle, &unifiedBufferData);
+
+		// Copy index data
+		void* data;
+		vkMapMemory(device, unifiedBufferData, 0, alignedIndexBufferSize, 0, &data);
+		memcpy(data, &indexBuffer.data[indexBufferView.byteOffset], indexBufferSize);
+		vkUnmapMemory(device, unifiedBufferData);
+
+		// Copy vertex data
+		vkMapMemory(device, unifiedBufferData, alignedIndexBufferSize, vertexBufferSize, 0, &data);
+		memcpy(data, &positionBuffer.data[positionBufferView.byteOffset], vertexBufferSize);
+		vkUnmapMemory(device, unifiedBufferData);
+
+		indexBufferOffset = 0;
+		vertexBufferOffset = alignedIndexBufferSize;
+		indexCount = indexAccessor.count;
 	}
 
 	void CompileShaders()
@@ -131,7 +211,7 @@ private:
 	{
 		shaderc_compile_options_t retval = shaderc_compile_options_initialize();
 		shaderc_compile_options_set_source_language(retval, shaderc_source_language_hlsl);
-		shaderc_compile_options_set_invert_y(retval, true);	// TODO: Part 3e
+		shaderc_compile_options_set_invert_y(retval, true);
 #ifndef NDEBUG
 		shaderc_compile_options_set_generate_debug_info(retval);
 #endif
@@ -141,7 +221,7 @@ private:
 	void CompileVertexShader(const shaderc_compiler_t& compiler, const shaderc_compile_options_t& options)
 	{
 		std::string vertexShaderSource = ReadFileIntoString("../VertexShader.hlsl");
-		
+
 		shaderc_compilation_result_t result = shaderc_compile_into_spv( // compile
 			compiler, vertexShaderSource.c_str(), vertexShaderSource.length(),
 			shaderc_vertex_shader, "main.vert", "main", options);
@@ -183,7 +263,7 @@ private:
 	// Create Pipeline & Layout (Thanks Tiny!)
 	void InitializeGraphicsPipeline()
 	{
-		VkPipelineShaderStageCreateInfo stage_create_info[2] = {};	
+		VkPipelineShaderStageCreateInfo stage_create_info[2] = {};
 
 		// Create Stage Info for Vertex Shader
 		stage_create_info[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -201,11 +281,16 @@ private:
 		VkPipelineInputAssemblyStateCreateInfo assembly_create_info = CreateVkPipelineInputAssemblyStateCreateInfo();
 		VkVertexInputBindingDescription vertex_binding_description = CreateVkVertexInputBindingDescription();
 
-		// TODO: Part 1c
+
+		vertex_binding_description.binding = 0;
+		vertex_binding_description.stride = 3 * sizeof(float); // 3 floats for position (12 bytes)
+		vertex_binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+
 		VkVertexInputAttributeDescription vertex_attribute_descriptions[1];
 		vertex_attribute_descriptions[0].binding = 0;
 		vertex_attribute_descriptions[0].location = 0;
-		vertex_attribute_descriptions[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+		vertex_attribute_descriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		vertex_attribute_descriptions[0].offset = 0;
 
 		VkPipelineVertexInputStateCreateInfo input_vertex_info = CreateVkPipelineVertexInputStateCreateInfo(&vertex_binding_description, 1, vertex_attribute_descriptions, 1);
@@ -218,14 +303,16 @@ private:
 		VkPipelineColorBlendAttachmentState color_blend_attachment_state = CreateVkPipelineColorBlendAttachmentState();
 		VkPipelineColorBlendStateCreateInfo color_blend_create_info = CreateVkPipelineColorBlendStateCreateInfo(&color_blend_attachment_state, 1);
 
-		VkDynamicState dynamic_states[2] = 
+		VkDynamicState dynamic_states[2] =
 		{
 			// By setting these we do not need to re-create the pipeline on Resize
-			VK_DYNAMIC_STATE_VIEWPORT, 
+			VK_DYNAMIC_STATE_VIEWPORT,
 			VK_DYNAMIC_STATE_SCISSOR
 		};
 
 		VkPipelineDynamicStateCreateInfo dynamic_create_info = CreateVkPipelineDynamicStateCreateInfo(dynamic_states, 2);
+
+
 
 		CreatePipelineLayout();
 
@@ -246,7 +333,7 @@ private:
 		pipeline_create_info.renderPass = renderPass;
 		pipeline_create_info.subpass = 0;
 		pipeline_create_info.basePipelineHandle = VK_NULL_HANDLE;
-		
+
 		vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_create_info, nullptr, &pipeline);
 	}
 
@@ -264,7 +351,7 @@ private:
 	{
 		VkPipelineInputAssemblyStateCreateInfo retval = {};
 		retval.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
-		retval.topology = VK_PRIMITIVE_TOPOLOGY_LINE_LIST; // TODO: Part 1b  // changed to VK_PRIMITIVE_TOPOLOGY_LINE_LIST
+		retval.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 		retval.primitiveRestartEnable = false;
 		return retval;
 	}
@@ -273,7 +360,7 @@ private:
 	{
 		VkVertexInputBindingDescription retval = {};
 		retval.binding = 0;
-		retval.stride = sizeof(Vertex); 	
+		retval.stride = sizeof(float) * 3; 	
 		retval.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 		return retval;
 	}
@@ -326,19 +413,19 @@ private:
 
 	VkPipelineRasterizationStateCreateInfo CreateVkPipelineRasterizationStateCreateInfo()
 	{
-		VkPipelineRasterizationStateCreateInfo retval = {};
-		retval.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-		retval.rasterizerDiscardEnable = VK_FALSE;
-		retval.polygonMode = VK_POLYGON_MODE_FILL;
-		retval.lineWidth = 1.0f;
-		retval.cullMode = VK_CULL_MODE_BACK_BIT;
-		retval.frontFace = VK_FRONT_FACE_CLOCKWISE;
-		retval.depthClampEnable = VK_FALSE;
-		retval.depthBiasEnable = VK_FALSE;
-		retval.depthBiasClamp = 0.0f;
-		retval.depthBiasConstantFactor = 0.0f;
-		retval.depthBiasSlopeFactor = 0.0f;
-		return retval;
+		VkPipelineRasterizationStateCreateInfo rasterizer = {};
+		rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+		rasterizer.depthClampEnable = VK_FALSE;
+		rasterizer.rasterizerDiscardEnable = VK_FALSE;
+		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+		rasterizer.lineWidth = 1.0f;
+		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;  // Enable back-face culling
+		rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Set to counter-clockwise
+		rasterizer.depthBiasEnable = VK_FALSE;
+		rasterizer.depthBiasConstantFactor = 0.0f;
+		rasterizer.depthBiasClamp = 0.0f;
+		rasterizer.depthBiasSlopeFactor = 0.0f;
+		return rasterizer;
 	}
 
 	VkPipelineMultisampleStateCreateInfo CreateVkPipelineMultisampleStateCreateInfo()
@@ -408,12 +495,12 @@ private:
 
 	void CreatePipelineLayout()
 	{
-		
+
 		VkPipelineLayoutCreateInfo pipeline_layout_create_info = {};
 		pipeline_layout_create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-		pipeline_layout_create_info.setLayoutCount = 0; // TODO: Part 2e
-		pipeline_layout_create_info.pSetLayouts = VK_NULL_HANDLE; // TODO: Part 2e
-		pipeline_layout_create_info.pushConstantRangeCount = 0; 
+		pipeline_layout_create_info.setLayoutCount = 0;
+		pipeline_layout_create_info.pSetLayouts = VK_NULL_HANDLE; 
+		pipeline_layout_create_info.pushConstantRangeCount = 0;
 		pipeline_layout_create_info.pPushConstantRanges = nullptr;
 
 		vkCreatePipelineLayout(device, &pipeline_layout_create_info, nullptr, &pipelineLayout);
@@ -436,12 +523,25 @@ public:
 		VkCommandBuffer commandBuffer = GetCurrentCommandBuffer();
 		SetUpPipeline(commandBuffer);
 
-		const int gridDensity = 25;
-		const int totalLines = (gridDensity + 1) * 2;
-		const int verticesPerLine = 2;
-		const int totalVertices = totalLines * verticesPerLine;
 
-		vkCmdDraw(commandBuffer, totalVertices, 1, 0, 0); // TODO: Part 1b		// changed to 6 points 
+	
+
+		VkDeviceSize offsets[] = { vertexBufferOffset };
+		//VkDeviceSize vertexBufferOffset = 8; // Vertex data starts at byte offset 8 in the unified buffer
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &unifiedBufferHandle, offsets);
+
+		// Bind the unified buffer as index buffer
+		//VkDeviceSize indexBufferOffset = 0; // Index data starts at byte offset 0 in the unified buffer
+		vkCmdBindIndexBuffer(commandBuffer, unifiedBufferHandle, indexBufferOffset, VK_INDEX_TYPE_UINT16);
+
+		// Use vkCmdDrawIndexed to draw the mesh
+		 
+		//std::cout << indexCount << "    " << indexBufferOffset <<	vertexBufferOffset	<<  std::endl;
+
+
+		//uint32_t indexCount = 3; // Number of indices from GLTF accessor
+		vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+		//vkCmdDraw(commandBuffer, 3, 1, 0, 0); 
 	}
 
 
@@ -480,7 +580,7 @@ private:
 	void BindVertexBuffers(VkCommandBuffer& commandBuffer)
 	{
 		VkDeviceSize offsets[] = { 0 };
-		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexHandle, offsets);
+		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &unifiedBufferHandle, offsets);
 	}
 
 
@@ -491,8 +591,8 @@ private:
 		vkDeviceWaitIdle(device);
 
 		// Release allocated buffers, shaders & pipeline
-		vkDestroyBuffer(device, vertexHandle, nullptr);
-		vkFreeMemory(device, vertexData, nullptr);
+		vkDestroyBuffer(device, unifiedBufferHandle, nullptr);
+		vkFreeMemory(device, unifiedBufferData, nullptr);
 		vkDestroyShaderModule(device, vertexShader, nullptr);
 		vkDestroyShaderModule(device, fragmentShader, nullptr);
 		vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
