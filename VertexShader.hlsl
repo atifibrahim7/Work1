@@ -1,25 +1,38 @@
-struct VSInput
+struct OBJ_ATTRIBUTES
 {
-    float3 position : POSITION;
-    float3 normal : NORMAL;
-    float2 uv : TEXCOORD0;
-    float4 tangent : TANGENT;
+    float3 Position : POSITION;
+    float3 Normal : NORMAL;
+    float2 UV : TEXCOORD;
+    float4 Tangent : TANGENT;
 };
 
-struct VSOutput
+struct SHADER_VARS
+{
+    float4x4 viewMatrix;
+    float4x4 projectionMatrix;
+};
+
+cbuffer UboView : register(b0)
+{
+    SHADER_VARS ubo;
+}
+
+struct VOut
 {
     float4 position : SV_POSITION;
-    float3 normal : NORMAL;
-    float2 uv : TEXCOORD0;
-    float4 tangent : TANGENT;
+    float4 color : COLOR;
 };
 
-VSOutput main(VSInput input)
+VOut main(OBJ_ATTRIBUTES input)
 {
-    VSOutput output;
-    output.position = float4(input.position, 1.0f);
-    output.normal = input.normal;
-    output.uv = input.uv;
-    output.tangent = input.tangent;
+    VOut output;
+    
+    float4 worldPosition = float4(input.Position, 1.0f);
+    float4 viewPosition = mul(ubo.viewMatrix, worldPosition);
+    output.position = mul(ubo.projectionMatrix, viewPosition);
+    
+    // Simple color based on position for visualization
+    output.color = float4(input.Position.xyz, 1.0f);
+    
     return output;
 }
