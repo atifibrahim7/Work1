@@ -46,12 +46,16 @@ class Renderer
 	tinygltf::TinyGLTF loader;	
 	
 
+	std::vector<VkDeviceSize> attributeOffsets;
+	std::vector<VkDeviceSize> attributeSizes;
+	VkDeviceSize totalBufferSize;
+
 public:
 	Renderer(GW::SYSTEM::GWindow _win, GW::GRAPHICS::GVulkanSurface _vlk)
 	{
 		win = _win;
 		vlk = _vlk;
-		LoadGLTFModel("../Models/triangle.gltf");
+		LoadGLTFModel("../Models/blender_bebe.gltf");
 
 		UpdateWindowDimensions();
 		InitializeGraphics();
@@ -136,40 +140,31 @@ private:
 		CreateUnifiedBuffer();
 	}
 
-	//void CreateUnifiedBuffer(const void* data, unsigned int sizeInBytes)
-	//{
-	//	// Combine VERTEX and INDEX buffer usage flags
-	//	VkBufferUsageFlags usageFlags = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-
-	//	// Create buffer with both vertex and index buffer usage flags
-	//	GvkHelper::create_buffer(physicalDevice, device, sizeInBytes, usageFlags,
-	//		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-	//		&unifiedBufferHandle, &unifiedBufferData);
-
-	//	// Write data to the unified buffer
-	//	GvkHelper::write_to_buffer(device, unifiedBufferData, data, sizeInBytes);
-	//}
 	void CreateUnifiedBuffer()
 	{
 		const tinygltf::Mesh& mesh = model.meshes[0];
 		const tinygltf::Primitive& primitive = mesh.primitives[0];
 
+		attributeOffsets.resize(4);
+		attributeSizes.resize(4);
+		totalBufferSize = 0;
+
+		// Calculate sizes and offsets for each attribute
+		for (int i = 0; i < 4; ++i)
+		{
+			const tinygltf::Accessor& accessor = model.accessors[i];
+			const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+			attributeSizes[i] = bufferView.byteLength;
+			attributeOffsets[i] = totalBufferSize;
+			totalBufferSize += attributeSizes[i];
+		}
+
+		// Add index buffer size
 		const tinygltf::Accessor& indexAccessor = model.accessors[primitive.indices];
 		const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccessor.bufferView];
-		const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
-
-		int positionAccessorIndex = primitive.attributes.find("POSITION")->second;
-		const tinygltf::Accessor& positionAccessor = model.accessors[positionAccessorIndex];
-		const tinygltf::BufferView& positionBufferView = model.bufferViews[positionAccessor.bufferView];
-		const tinygltf::Buffer& positionBuffer = model.buffers[positionBufferView.buffer];
-
-		VkDeviceSize indexBufferSize = indexAccessor.count * sizeof(uint16_t);
-		VkDeviceSize vertexBufferSize = positionAccessor.count * 3 * sizeof(float);
-
-		// Ensure index buffer size is aligned to 4 bytes
-		VkDeviceSize alignedIndexBufferSize = (indexBufferSize + 3) & ~3;
-
-		VkDeviceSize totalBufferSize = alignedIndexBufferSize + vertexBufferSize;
+		VkDeviceSize indexBufferSize = indexBufferView.byteLength;
+		indexBufferOffset = totalBufferSize;
+		totalBufferSize += indexBufferSize;
 
 		// Create unified buffer
 		GvkHelper::create_buffer(physicalDevice, device, totalBufferSize,
@@ -177,21 +172,80 @@ private:
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 			&unifiedBufferHandle, &unifiedBufferData);
 
+		// Copy vertex data
+		for (int i = 0; i < 4; ++i)
+		{
+			const tinygltf::Accessor& accessor = model.accessors[i];
+			const tinygltf::BufferView& bufferView = model.bufferViews[accessor.bufferView];
+			const tinygltf::Buffer& buffer = model.buffers[bufferView.buffer];
+
+			void* data;
+			vkMapMemory(device, unifiedBufferData, attributeOffsets[i], attributeSizes[i], 0, &data);
+			memcpy(data, &buffer.data[bufferView.byteOffset], attributeSizes[i]);
+			vkUnmapMemory(device, unifiedBufferData);
+		}
+
 		// Copy index data
 		void* data;
-		vkMapMemory(device, unifiedBufferData, 0, alignedIndexBufferSize, 0, &data);
-		memcpy(data, &indexBuffer.data[indexBufferView.byteOffset], indexBufferSize);
+		vkMapMemory(device, unifiedBufferData, indexBufferOffset, indexBufferSize, 0, &data);
+		memcpy(data, &model.buffers[indexBufferView.buffer].data[indexBufferView.byteOffset], indexBufferSize);
 		vkUnmapMemory(device, unifiedBufferData);
 
-		// Copy vertex data
-		vkMapMemory(device, unifiedBufferData, alignedIndexBufferSize, vertexBufferSize, 0, &data);
-		memcpy(data, &positionBuffer.data[positionBufferView.byteOffset], vertexBufferSize);
-		vkUnmapMemory(device, unifiedBufferData);
-
-		indexBufferOffset = 0;
-		vertexBufferOffset = alignedIndexBufferSize;
 		indexCount = indexAccessor.count;
+
+
+		std::cout << "Total buffer size: " << totalBufferSize << std::endl;
+		for (int i = 0; i < 4; ++i)
+		{
+			std::cout << "Attribute " << i << " - Offset: " << attributeOffsets[i]
+				<< ", Size: " << attributeSizes[i] << std::endl;
+		}
+		std::cout << "Index buffer - Offset: " << indexBufferOffset
+			<< ", Size: " << indexBufferSize << std::endl;
 	}
+	//void CreateUnifiedBuffer()
+	//{
+	//	const tinygltf::Mesh& mesh = model.meshes[0];
+	//	const tinygltf::Primitive& primitive = mesh.primitives[0];
+
+	//	const tinygltf::Accessor& indexAccessor = model.accessors[primitive.indices];
+	//	const tinygltf::BufferView& indexBufferView = model.bufferViews[indexAccessor.bufferView];
+	//	const tinygltf::Buffer& indexBuffer = model.buffers[indexBufferView.buffer];
+
+	//	int positionAccessorIndex = primitive.attributes.find("POSITION")->second;
+	//	const tinygltf::Accessor& positionAccessor = model.accessors[positionAccessorIndex];
+	//	const tinygltf::BufferView& positionBufferView = model.bufferViews[positionAccessor.bufferView];
+	//	const tinygltf::Buffer& positionBuffer = model.buffers[positionBufferView.buffer];
+
+	//	VkDeviceSize indexBufferSize = indexAccessor.count * sizeof(uint16_t);
+	//	VkDeviceSize vertexBufferSize = positionAccessor.count * 3 * sizeof(float);
+
+	//	// Ensure index buffer size is aligned to 4 bytes
+	//	VkDeviceSize alignedIndexBufferSize = (indexBufferSize + 3) & ~3;
+
+	//	VkDeviceSize totalBufferSize = alignedIndexBufferSize + vertexBufferSize;
+
+	//	// Create unified buffer
+	//	GvkHelper::create_buffer(physicalDevice, device, totalBufferSize,
+	//		VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+	//		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+	//		&unifiedBufferHandle, &unifiedBufferData);
+
+	//	// Copy index data
+	//	void* data;
+	//	vkMapMemory(device, unifiedBufferData, 0, alignedIndexBufferSize, 0, &data);
+	//	memcpy(data, &indexBuffer.data[indexBufferView.byteOffset], indexBufferSize);
+	//	vkUnmapMemory(device, unifiedBufferData);
+
+	//	// Copy vertex data
+	//	vkMapMemory(device, unifiedBufferData, alignedIndexBufferSize, vertexBufferSize, 0, &data);
+	//	memcpy(data, &positionBuffer.data[positionBufferView.byteOffset], vertexBufferSize);
+	//	vkUnmapMemory(device, unifiedBufferData);
+
+	//	indexBufferOffset = 0;
+	//	vertexBufferOffset = alignedIndexBufferSize;
+	//	indexCount = indexAccessor.count;
+	//}
 
 	void CompileShaders()
 	{
@@ -259,7 +313,52 @@ private:
 
 		shaderc_result_release(result); // done
 	}
+	
+	std::vector<VkVertexInputAttributeDescription> CreateVkVertexInputAttributeDescriptions()
+{
+    std::vector<VkVertexInputAttributeDescription> attributeDescriptions(4);
 
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[0].offset = 0;
+
+    attributeDescriptions[1].binding = 1;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attributeDescriptions[1].offset = 0;
+
+    attributeDescriptions[2].binding = 2;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[2].offset = 0;
+
+    attributeDescriptions[3].binding = 3;
+    attributeDescriptions[3].location = 3;
+    attributeDescriptions[3].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attributeDescriptions[3].offset = 0;
+
+    return attributeDescriptions;
+}
+
+	std::vector<VkVertexInputBindingDescription> CreateVkVertexInputBindingDescriptions() 
+	{
+		std::vector<VkVertexInputBindingDescription> bindingDescriptions(4);
+
+		for (int i = 0; i < 4; ++i)
+		{
+			bindingDescriptions[i].binding = i;
+			bindingDescriptions[i].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+		}
+
+		// Set strides based on the accessor's byte stride
+		bindingDescriptions[0].stride = model.accessors[0].ByteStride(model.bufferViews[model.accessors[0].bufferView]);
+		bindingDescriptions[1].stride = model.accessors[1].ByteStride(model.bufferViews[model.accessors[1].bufferView]);
+		bindingDescriptions[2].stride = model.accessors[2].ByteStride(model.bufferViews[model.accessors[2].bufferView]);
+		bindingDescriptions[3].stride = model.accessors[3].ByteStride(model.bufferViews[model.accessors[3].bufferView]);
+
+		return bindingDescriptions;
+	}
 	// Create Pipeline & Layout (Thanks Tiny!)
 	void InitializeGraphicsPipeline()
 	{
@@ -279,21 +378,24 @@ private:
 
 
 		VkPipelineInputAssemblyStateCreateInfo assembly_create_info = CreateVkPipelineInputAssemblyStateCreateInfo();
-		VkVertexInputBindingDescription vertex_binding_description = CreateVkVertexInputBindingDescription();
+		auto vertex_binding_description = CreateVkVertexInputBindingDescriptions();
 
 
-		vertex_binding_description.binding = 0;
-		vertex_binding_description.stride = 3 * sizeof(float); // 3 floats for position (12 bytes)
-		vertex_binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+		//vertex_binding_description.binding = 0;
+		//vertex_binding_description.stride = 3 * sizeof(float); // 3 floats for position (12 bytes)
+		//vertex_binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+		auto attributeDescriptions = CreateVkVertexInputAttributeDescriptions();
 
 
-		VkVertexInputAttributeDescription vertex_attribute_descriptions[1];
+		/*VkVertexInputAttributeDescription vertex_attribute_descriptions[1];
 		vertex_attribute_descriptions[0].binding = 0;
 		vertex_attribute_descriptions[0].location = 0;
 		vertex_attribute_descriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
-		vertex_attribute_descriptions[0].offset = 0;
-
-		VkPipelineVertexInputStateCreateInfo input_vertex_info = CreateVkPipelineVertexInputStateCreateInfo(&vertex_binding_description, 1, vertex_attribute_descriptions, 1);
+		vertex_attribute_descriptions[0].offset = 0;*/
+		VkPipelineVertexInputStateCreateInfo input_vertex_info = CreateVkPipelineVertexInputStateCreateInfo(
+			vertex_binding_description.data(), vertex_binding_description.size(),
+			attributeDescriptions.data(), attributeDescriptions.size());
 		VkViewport viewport = CreateViewportFromWindowDimensions();
 		VkRect2D scissor = CreateScissorFromWindowDimensions();
 		VkPipelineViewportStateCreateInfo viewport_create_info = CreateVkPipelineViewportStateCreateInfo(&viewport, 1, &scissor, 1);
@@ -356,15 +458,7 @@ private:
 		return retval;
 	}
 
-	VkVertexInputBindingDescription CreateVkVertexInputBindingDescription()
-	{
-		VkVertexInputBindingDescription retval = {};
-		retval.binding = 0;
-		retval.stride = sizeof(float) * 3; 	
-		retval.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-		return retval;
-	}
-
+	
 	VkPipelineVertexInputStateCreateInfo CreateVkPipelineVertexInputStateCreateInfo(
 		VkVertexInputBindingDescription* inputBindingDescriptions, unsigned int bindingCount,
 		VkVertexInputAttributeDescription* vertexAttributeDescriptions, unsigned int attributeCount)
@@ -577,12 +671,17 @@ private:
 		vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 	}
 
-	void BindVertexBuffers(VkCommandBuffer& commandBuffer)
+	/*void BindVertexBuffers(VkCommandBuffer& commandBuffer)
 	{
 		VkDeviceSize offsets[] = { 0 };
 		vkCmdBindVertexBuffers(commandBuffer, 0, 1, &unifiedBufferHandle, offsets);
-	}
+	}*/
 
+	void BindVertexBuffers(VkCommandBuffer& commandBuffer)
+	{
+		std::vector<VkBuffer> buffers(4, unifiedBufferHandle);
+		vkCmdBindVertexBuffers(commandBuffer, 0, 4, buffers.data(), attributeOffsets.data());
+	}
 
 	//Cleanup callback function (passed to VKSurface, will be called when the pipeline shuts down)
 	void CleanUp()
