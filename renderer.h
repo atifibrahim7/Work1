@@ -52,10 +52,14 @@ class Renderer
 
 	// D3
 
-	struct SHADER_VARS {
+	struct SHADER_VARS
+	{
 		GW::MATH::GMATRIXF viewMatrix;
 		GW::MATH::GMATRIXF projectionMatrix;
-		float padding[28];  // Adjust padding as needed
+		GW::MATH::GVECTORF sunDirection;
+		GW::MATH::GVECTORF sunColor;
+		GW::MATH::GVECTORF cameraPosition;
+		//float padding[12]; // Adjust padding as needed
 	};
 	GW::MATH::GMatrix math;
 	GW::MATH::GMATRIXF viewMatrix;
@@ -229,6 +233,9 @@ private:
 
 		shaderVars.viewMatrix = viewMatrix;
 		shaderVars.projectionMatrix = projectionMatrix;
+		shaderVars.sunDirection = { 0.0f, -0.8f, 0.0f, 0.0f }; // Example: light coming from above
+		shaderVars.sunColor = { 1.0f, 1.0f, 1.0f, 1.0f }; // White light
+		shaderVars.cameraPosition = { 0.0f, 0.0f, 0.0f, 1.0f }; // Example: camera at origin
 
 		void* data;
 		vkMapMemory(device, uniformBuffersMemory[currentImage], 0, sizeof(shaderVars), 0, &data);
@@ -713,7 +720,7 @@ private:
 		rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
 		rasterizer.lineWidth = 1.0f;
 		rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;  // Enable back-face culling
-		rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;  // Set to counter-clockwise
+		rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;  // Set to counter-clockwise
 		rasterizer.depthBiasEnable = VK_FALSE;
 		rasterizer.depthBiasConstantFactor = 0.0f;
 		rasterizer.depthBiasClamp = 0.0f;

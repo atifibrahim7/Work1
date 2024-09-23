@@ -10,6 +10,9 @@ struct SHADER_VARS
 {
     float4x4 viewMatrix;
     float4x4 projectionMatrix;
+    float4 sunDirection;
+    float4 sunColor;
+    float4 cameraPosition;
 };
 
 cbuffer UboView : register(b0)
@@ -20,7 +23,10 @@ cbuffer UboView : register(b0)
 struct VOut
 {
     float4 position : SV_POSITION;
-    float4 color : COLOR;
+    float3 worldPos : POSITION;
+    float3 normal : NORMAL;
+    float2 uv : TEXCOORD0;
+    float4 tangent : TANGENT;
 };
 
 VOut main(OBJ_ATTRIBUTES input)
@@ -31,8 +37,10 @@ VOut main(OBJ_ATTRIBUTES input)
     float4 viewPosition = mul(ubo.viewMatrix, worldPosition);
     output.position = mul(ubo.projectionMatrix, viewPosition);
     
-    // Simple color based on position for visualization
-    output.color = float4(input.Position.xyz, 1.0f);
+    output.worldPos = worldPosition.xyz;
+    output.normal = input.Normal;
+    output.uv = input.UV;
+    output.tangent = input.Tangent;
     
     return output;
 }
